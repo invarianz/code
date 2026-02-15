@@ -77,14 +77,9 @@ public class Code.SplitView : Gtk.Box {
             return;
         }
 
-        if (_active_pane != null) {
-            _active_pane.get_style_context ().remove_class ("active-pane");
-        }
-
         _active_pane = pane;
 
         if (_active_pane != null) {
-            _active_pane.get_style_context ().add_class ("active-pane");
             active_pane_changed (_active_pane);
         }
     }
