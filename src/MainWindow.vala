@@ -40,6 +40,7 @@ namespace Scratch {
         }
 
         public Scratch.Widgets.DocumentView document_view;
+        public Code.SplitView split_view;
 
         // Widgets
         public Scratch.HeaderBar toolbar;
@@ -47,6 +48,8 @@ namespace Scratch {
         private Code.WelcomeView welcome_view;
         private Code.Terminal terminal;
         private FolderManager.FileView folder_manager_view;
+        private Scratch.Widgets.DocumentView primary_document_view;
+        private Gtk.Grid view_grid;
         private Scratch.Services.DocumentManager document_manager;
         private Gtk.EventControllerKey key_controller;
         // Plugins
@@ -124,6 +127,16 @@ namespace Scratch {
         public const string ACTION_RESTORE_CLOSED_TAB = "action-restore-closed-tab";
         public const string ACTION_OPEN_IN_NEW_WINDOW = "action-open-in-new-window";
 
+        public const string ACTION_SPLIT_RIGHT_EDITOR = "action-split-right-editor";
+        public const string ACTION_SPLIT_RIGHT_TERMINAL = "action-split-right-terminal";
+        public const string ACTION_SPLIT_DOWN_EDITOR = "action-split-down-editor";
+        public const string ACTION_SPLIT_DOWN_TERMINAL = "action-split-down-terminal";
+        public const string ACTION_CLOSE_PANE = "action-close-pane";
+        public const string ACTION_FOCUS_PANE_LEFT = "action-focus-pane-left";
+        public const string ACTION_FOCUS_PANE_RIGHT = "action-focus-pane-right";
+        public const string ACTION_FOCUS_PANE_UP = "action-focus-pane-up";
+        public const string ACTION_FOCUS_PANE_DOWN = "action-focus-pane-down";
+
         public static Gee.MultiMap<string, string> action_accelerators = new Gee.HashMultiMap<string, string> ();
         private static string base_title;
 
@@ -186,6 +199,15 @@ namespace Scratch {
             { ACTION_MOVE_TAB_TO_NEW_WINDOW, action_move_tab_to_new_window },
             { ACTION_RESTORE_CLOSED_TAB, action_restore_closed_tab, "s" },
             { ACTION_OPEN_IN_NEW_WINDOW, action_open_in_new_window, "s" },
+            { ACTION_SPLIT_RIGHT_EDITOR, action_split_right_editor },
+            { ACTION_SPLIT_RIGHT_TERMINAL, action_split_right_terminal },
+            { ACTION_SPLIT_DOWN_EDITOR, action_split_down_editor },
+            { ACTION_SPLIT_DOWN_TERMINAL, action_split_down_terminal },
+            { ACTION_CLOSE_PANE, action_close_pane },
+            { ACTION_FOCUS_PANE_LEFT, action_focus_pane_left },
+            { ACTION_FOCUS_PANE_RIGHT, action_focus_pane_right },
+            { ACTION_FOCUS_PANE_UP, action_focus_pane_up },
+            { ACTION_FOCUS_PANE_DOWN, action_focus_pane_down },
         };
 
         public MainWindow (bool restore_docs) {
@@ -252,6 +274,16 @@ namespace Scratch {
             action_accelerators.set (ACTION_HIDE_PROJECT_DOCS + "::", "<Control><Shift>h");
             action_accelerators.set (ACTION_MOVE_TAB_TO_NEW_WINDOW, "<Control><Alt>n");
             action_accelerators.set (ACTION_RESTORE_PROJECT_DOCS + "::", "<Control><Shift>r");
+
+            action_accelerators.set (ACTION_SPLIT_RIGHT_EDITOR, "<Control><Shift>Right");
+            action_accelerators.set (ACTION_SPLIT_DOWN_EDITOR, "<Control><Shift>Down");
+            action_accelerators.set (ACTION_SPLIT_RIGHT_TERMINAL, "<Control><Alt><Shift>Right");
+            action_accelerators.set (ACTION_SPLIT_DOWN_TERMINAL, "<Control><Alt><Shift>Down");
+            action_accelerators.set (ACTION_CLOSE_PANE, "<Control><Shift>w");
+            action_accelerators.set (ACTION_FOCUS_PANE_LEFT, "<Control><Alt>Left");
+            action_accelerators.set (ACTION_FOCUS_PANE_RIGHT, "<Control><Alt>Right");
+            action_accelerators.set (ACTION_FOCUS_PANE_UP, "<Control><Alt>Up");
+            action_accelerators.set (ACTION_FOCUS_PANE_DOWN, "<Control><Alt>Down");
 
             var provider = new Gtk.CssProvider ();
             provider.load_from_resource ("io/elementary/code/Application.css");
@@ -504,11 +536,13 @@ namespace Scratch {
                 var allow = true;
                 foreach (var window in app.get_windows ()) {
                     var win = (MainWindow)window;
-                    foreach (var doc in win.document_view.docs) {
-                        if (doc.file.equal (file.file)) {
-                            // Only allow sidebar to rename docs that are in sync with their file in
-                            // all windows
-                            allow = allow && !doc.locked && doc.saved;
+                    foreach (var dv in win.split_view.get_all_document_views ()) {
+                        foreach (var doc in dv.docs) {
+                            if (doc.file.equal (file.file)) {
+                                // Only allow sidebar to rename docs that are in sync with their file in
+                                // all windows
+                                allow = allow && !doc.locked && doc.saved;
+                            }
                         }
                     }
                 }
@@ -521,11 +555,16 @@ namespace Scratch {
                 visible = false
             };
 
-            var view_grid = new Gtk.Grid () {
+            primary_document_view = document_view;
+
+            split_view = new Code.SplitView (this);
+            split_view.set_initial_content (document_view, Code.PaneType.EDITOR);
+
+            view_grid = new Gtk.Grid () {
                 orientation = Gtk.Orientation.VERTICAL
             };
             view_grid.add (search_bar);
-            view_grid.add (document_view);
+            view_grid.add (split_view);
 
             content_stack = new Gtk.Stack () {
                 expand = true,
@@ -565,7 +604,7 @@ namespace Scratch {
 
             realize.connect (() => {
                 Scratch.saved_state.bind ("sidebar-visible", sidebar, "visible", SettingsBindFlags.DEFAULT);
-                Scratch.saved_state.bind ("outline-visible", document_view , "outline_visible", SettingsBindFlags.DEFAULT);
+                Scratch.saved_state.bind ("outline-visible", primary_document_view, "outline_visible", SettingsBindFlags.DEFAULT);
                 Scratch.saved_state.bind ("terminal-visible", terminal, "visible", SettingsBindFlags.DEFAULT);
                 // Plugins hook
                 HookFunc hook_func = () => {
@@ -611,28 +650,32 @@ namespace Scratch {
             });
 
             document_view.document_change.connect ((doc) => {
-                if (doc != null) {
-                    search_bar.set_text_view (doc.source_view);
-                    // Update MainWindow title
-                    /// TRANSLATORS: First placeholder is document name, second placeholder is app name
-                    title = _("%s - %s").printf (doc.get_basename (), base_title);
-
-                    toolbar.set_document_focus (doc);
-
-                    folder_manager_view.select_path (doc.file.get_path ());
-
-                    // Must follow setting focus document for editorconfig plug
-                    plugins.hook_document (doc);
-
-                    // Set actions sensitive property
-                    Utils.action_from_group (ACTION_SAVE_AS, actions).set_enabled (doc.file != null);
-                    doc.check_undoable_actions ();
-                } else {
-                    title = base_title;
-                    Utils.action_from_group (ACTION_SAVE_AS, actions).set_enabled (false);
+                // Only update UI if primary view is still the active editor
+                if (primary_document_view == document_view) {
+                    on_document_view_document_change (doc, primary_document_view);
                 }
             });
 
+            // Handle split pane focus changes
+            split_view.active_pane_changed.connect ((pane) => {
+                if (pane.pane_type == Code.PaneType.EDITOR && pane.content is Scratch.Widgets.DocumentView) {
+                    var new_view = (Scratch.Widgets.DocumentView) pane.content;
+                    if (new_view != document_view) {
+                        document_view = new_view;
+                        // Trigger UI update for the newly focused editor
+                        if (document_view.current_document != null) {
+                            on_document_view_document_change (document_view.current_document, document_view);
+                        }
+                    }
+                }
+            });
+
+            // When new panes are created, connect their signals
+            split_view.pane_added.connect ((pane) => {
+                if (pane.pane_type == Code.PaneType.EDITOR && pane.content is Scratch.Widgets.DocumentView) {
+                    connect_document_view_signals ((Scratch.Widgets.DocumentView) pane.content);
+                }
+            });
 
             set_widgets_sensitive (false);
         }
@@ -803,11 +846,13 @@ namespace Scratch {
 
         // Check that there no unsaved changes and all saves are successful
         private async bool check_unsaved_changes () {
-            document_view.is_closing = true;
-            foreach (var doc in document_view.docs) {
-                if (!yield (doc.do_close (true))) {
-                    document_view.current_document = doc;
-                    return false;
+            foreach (var dv in split_view.get_all_document_views ()) {
+                dv.is_closing = true;
+                foreach (var doc in dv.docs) {
+                    if (!yield (doc.do_close (true))) {
+                        dv.current_document = doc;
+                        return false;
+                    }
                 }
             }
 
@@ -869,7 +914,10 @@ namespace Scratch {
 
         // For exit cleanup
         private void handle_quit () {
-            document_view.save_opened_files ();
+            // Save opened files from all editor panes
+            foreach (var dv in split_view.get_all_document_views ()) {
+                dv.save_opened_files ();
+            }
             update_saved_state ();
         }
 
@@ -1472,7 +1520,10 @@ namespace Scratch {
 
         private void action_toggle_outline (SimpleAction action) {
             action.set_state (!action.get_state ().get_boolean ());
-            document_view.outline_visible = action.get_state ().get_boolean ();
+            var visible = action.get_state ().get_boolean ();
+            foreach (var dv in split_view.get_all_document_views ()) {
+                dv.outline_visible = visible;
+            }
         }
 
         private void action_next_tab () {
@@ -1525,6 +1576,108 @@ namespace Scratch {
 
         private void action_move_tab_to_new_window () {
             document_view.transfer_tab_to_new_window ();
+        }
+
+        private void on_document_view_document_change (Scratch.Services.Document? doc, Scratch.Widgets.DocumentView source_view) {
+            if (doc != null) {
+                search_bar.set_text_view (doc.source_view);
+                /// TRANSLATORS: First placeholder is document name, second placeholder is app name
+                title = _("%s - %s").printf (doc.get_basename (), base_title);
+
+                toolbar.set_document_focus (doc);
+
+                folder_manager_view.select_path (doc.file.get_path ());
+
+                // Must follow setting focus document for editorconfig plug
+                plugins.hook_document (doc);
+
+                // Set actions sensitive property
+                Utils.action_from_group (ACTION_SAVE_AS, actions).set_enabled (doc.file != null);
+                doc.check_undoable_actions ();
+            } else {
+                title = base_title;
+                Utils.action_from_group (ACTION_SAVE_AS, actions).set_enabled (false);
+            }
+        }
+
+        private void connect_document_view_signals (Scratch.Widgets.DocumentView dv) {
+            dv.request_placeholder.connect (() => {
+                if (dv == primary_document_view) {
+                    if (split_view.pane_count <= 1) {
+                        content_stack.visible_child = welcome_view;
+                        title = base_title;
+                        toolbar.document_available (false);
+                        set_widgets_sensitive (false);
+                    }
+                } else {
+                    // Auto-close empty secondary editor panes
+                    var pane = split_view.find_pane_for_widget (dv);
+                    if (pane != null) {
+                        split_view.close_pane (pane);
+                    }
+                }
+            });
+
+            dv.tab_added.connect (() => {
+                content_stack.visible_child = view_grid;
+                toolbar.document_available (true);
+                set_widgets_sensitive (true);
+                update_find_actions ();
+            });
+
+            dv.tab_removed.connect ((doc) => {
+                update_find_actions ();
+                var selected_item = (Scratch.FolderManager.Item?)(folder_manager_view.selected);
+                if (selected_item != null && selected_item.file.file.equal (doc.file)) {
+                    folder_manager_view.selected = null;
+                }
+            });
+
+            dv.document_change.connect ((doc) => {
+                // Only update UI if this is the currently active editor
+                if (dv == document_view) {
+                    on_document_view_document_change (doc, dv);
+                }
+            });
+        }
+
+        // Split view actions
+        private void action_split_right_editor () {
+            split_view.split_right (Code.PaneType.EDITOR);
+        }
+
+        private void action_split_right_terminal () {
+            split_view.split_right (Code.PaneType.TERMINAL);
+        }
+
+        private void action_split_down_editor () {
+            split_view.split_down (Code.PaneType.EDITOR);
+        }
+
+        private void action_split_down_terminal () {
+            split_view.split_down (Code.PaneType.TERMINAL);
+        }
+
+        private void action_close_pane () {
+            if (split_view.pane_count > 1) {
+                split_view.close_pane ();
+            }
+        }
+
+        private void action_focus_pane_left () {
+            split_view.focus_direction (Gtk.DirectionType.LEFT);
+        }
+
+        private void action_focus_pane_right () {
+            split_view.focus_direction (Gtk.DirectionType.RIGHT);
+        }
+
+        private void action_focus_pane_up () {
+            split_view.focus_direction (Gtk.DirectionType.UP);
+        }
+
+        private void action_focus_pane_down () {
+            split_view.focus_direction (Gtk.DirectionType.DOWN);
         }
 
         private string? get_target_path_for_actions (Variant? path_variant, bool use_build_dir = false) {

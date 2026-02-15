@@ -56,6 +56,7 @@ code_files = files(
     'Widgets/SourceList/CellRendererExpander.vala',
     'Widgets/SourceList/SourceList.vala',
     'Widgets/SourceView.vala',
+    'Widgets/SplitView.vala',
     'Widgets/Terminal.vala',
     'Widgets/WelcomeView.vala',
     'SymbolPane/SymbolOutline.vala',

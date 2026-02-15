@@ -77,3 +77,7 @@ textview.scrubber {
 .symbol-outline .sidebar {
     background: inherit;
 }
+
+.active-pane {
+    border-top: 2px solid alpha(@selected_bg_color, 0.7);
+}
